@@ -6,6 +6,8 @@
 
 // thanks to the following useful article: http://www.dyadica.co.uk/journal/simple-serial-string-parsing/
 
+#include <stdlib.h>
+#include <string.h>
 #include <SPI.h>
 #include <MCP4801.h>
 #include <PID_v1.h>
@@ -28,7 +30,7 @@ OversamplerData *oversampler = NULL;
 void setup()
 {
   Serial.begin(9600, SERIAL_8N1);
-  Serial.println("Temperature PID controller startup!");
+  Serial.print("\nTemperature PID controller starting up!\n");
   
   //start up the SPI bus                   
   SPI.begin();
@@ -62,11 +64,11 @@ const float rsense_ohms = 0.333;
 
 
 #define MAX_INPUT_BUFFER_LENGTH 16
-char inputBuffer[MAX_INPUT_BUFFER_LENGTH + sizeof('\0')];
+char inputBuffer[MAX_INPUT_BUFFER_LENGTH + sizeof('\0')] = {'\0'};
 char *inputBufferPointer = inputBuffer;
 boolean isInBufferOverflowState = false;
 boolean completedInputLineIsReady = false;
-String completedLineOfInput;
+char completedLineOfInput[sizeof(inputBuffer)] = {'\0'};
 
 void possiblyHandleInputChar()
 {
@@ -93,8 +95,8 @@ void handleInputChar(char ch)
 
   if (ch == '\n')
   {
-    inputBufferPointer = '\0';
-    completedLineOfInput = String(inputBuffer)
+    *inputBufferPointer = '\0';
+    strncpy(completedLineOfInput, inputBuffer, sizeof(inputBuffer));
     completedInputLineIsReady = true;
     inputBufferPointer = inputBuffer;
   }
@@ -117,109 +119,130 @@ serial terminal interface:
 
 stop
 
-  turn off the heater and stop the PID loop
+  turn off the heater and stop the PID loop.
 
 start
 
-  turn on the heater and start the PID loop
+  turn on the heater and start the PID loop.
+
+t 45.0
+
+  set the temperature setpoint to 45 degrees celcius.
 
 kp 1.0
 
-  set the proportional constant to 1.0
+  set the proportional constant to 1.0.
 
 ki 1.0
 
-  set the integral constant to 1.0
+  set the integral constant to 1.0.
 
 kd 1.0
 
-  set the derivative constant to 1.0
+  set the derivative constant to 1.0.
 
 callow 25.0
 
-  use the current temperature sensor reading to calibrate the lower end of the temperature linear interpolation scale to 25.0 degrees celcius
+  use the current temperature sensor reading to calibrate the lower end of the temperature linear interpolation scale to 25.0 degrees celcius.
 
 calhigh 50.0
 
-  use the current temperature sensor reading to calibrate the upper end of the temperature linear interpolation scale to 50.0 degrees celcius
+  use the current temperature sensor reading to calibrate the upper end of the temperature linear interpolation scale to 50.0 degrees celcius.
 
 */
 
 void possiblyHandleCompletedLineOfInput()
 {
-  if (completedLineOfInput == NULL)
+  if (completedInputLineIsReady == false)
   {
     return;
   }
 
   handleCompletedLineOfInput(completedLineOfInput);
-  completedLineOfInput = NULL;
+  completedLineOfInput[0] = '\0';
+  completedInputLineIsReady = false;
 }
 
-void handleCompletedLineOfInput(String inputLine)
+void handleCompletedLineOfInput(char *inputLine)
 {
   char *p = inputLine;
   char *command = strtok_r(p, " ", &p);
 
-  switch(command)
+  if (command == NULL)
   {
-    case 'start':
-    {
-      start();
-      return;
-    }
+    unknown_command();
+    return;
+  }
 
-    case 'stop':
-    {
-      stop();
-      return;
-    }
+  if (strcmp(command, "start") == 0)
+  {
+    start();
+    return;
+  }
+
+  if (strcmp(command, "stop") == 0)
+  {
+    stop();
+    return;
   }
 
   char *tailptr = p;
-  float value = strtof(p, &tailptr);
+  float value = strtod(p, &tailptr);
   if (tailptr == p)
   {
     // see http://www.gnu.org/software/libc/manual/html_node/Parsing-of-Floats.html
     // see http://forum.arduino.cc/index.php/topic,42770.0.html
-    unkonwn_command();
+    unknown_command();
     return;
   }
 
-  switch(command)
+  if (strcmp(command, "kp") == 0)
   {
-    case 'kp':
-    {
-      set_kp(value);
-      return;
-    }
+    set_kp(value);
+    return;
+  }
 
-    case 'ki':
-    {
-      set_ki(value);
-      return;
-    }
+  if (strcmp(command, "ki") == 0)
+  {
+    set_ki(value);
+    return;
+  }
 
-    case 'kd':
-    {
-      set_kd(value);
-      return;
-    }
+  if (strcmp(command, "kd") == 0)
+  {
+    set_kd(value);
+    return;
+  }
 
-    case 'callow':
-    {
-      cal_low(value);
-      return;
-    }
+  if (strcmp(command, "callow") == 0)
+  {
+    cal_low(value);
+    return;
+  }
 
-    case 'calhigh':
-    {
-      cal_high(value);
-      return;
-    }
+  if (strcmp(command, "calhigh") == 0)
+  {
+    cal_high(value);
+    return;
   }
 
   unknown_command();
+}
+
+void stop()
+{
+  Serial.print("\nEnabling heater and starting PID control loop.\n");
+}
+
+void start()
+{
+  Serial.print("\nStopping PID control loop and disabling heater.\n");
+}
+
+void set_t(float newValue)
+{
+  Setpoint = newValue;
+  serialPrintSettingTo("temperature setpoint", newValue);
 }
 
 void set_kp(float newValue)
@@ -240,7 +263,7 @@ void set_kd(float newValue)
   serialPrintSettingTo("derivative constant", newValue);
 }
 
-void serialPrintSettingTo(String what, float toValue)
+void serialPrintSettingTo(char *what, float toValue)
 {
   Serial.print("\nSetting ");
   Serial.print(what);
@@ -259,12 +282,16 @@ void cal_high(float newValue)
   serialPrintSettingTo("upper calibration point to", newValue);
 }
 
-void unkonwn_command()
+void unknown_command()
 {
   Serial.print("\nUnknown command.\n");
 }
 
 
+void possiblyIteratePIDLoop()
+{
+
+}
 
 void loop()
 {
