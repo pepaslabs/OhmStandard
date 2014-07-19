@@ -7,16 +7,14 @@
 // thanks to the following useful article: http://www.dyadica.co.uk/journal/simple-serial-string-parsing/
 
 #include <stdlib.h>
-#include <string.h> // for strcmp, strtod
-
-#include <stdint.h> // for uint16_t
+#include <string.h>
+#include <stdint.h>
+#include <limits.h>
 
 #include <SPI.h>
 #include <MCP4801.h>
 #include <PID_v1.h>
-
 #include "Oversampler.h"
-// Oversampler uses about 176 bytes (of 8K)
 
 //configure the DAC chip
 MCP4801Class voltageDAC(10,  //slaveSelectLowPin
@@ -24,14 +22,11 @@ MCP4801Class voltageDAC(10,  //slaveSelectLowPin
                         9  //shutdownLowPin
                        );
 
-double setpoint = 40.0; // degrees C
-double input = 0;
-double output = 0;
+double Setpoint, Input, Output;
 float kp = 0.7;
 float ki = 0.3;
 float kd = 0.01;
-PID myPID = PID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
-
+PID myPID(&Input, &Output, &Setpoint, kp, ki, kd, DIRECT);
 
 uint16_t pidControlLoopPeriodInMillis = 1000;
 unsigned long timeOfLastPIDControlLoopIterationInMillis = 0;
@@ -40,8 +35,6 @@ OversamplerData oversampler;
 
 void setup()
 {
-  initOversamplerData(&oversampler);
-
   Serial.begin(9600, SERIAL_8N1);
   // Serial.print("\nTemperature PID controller starting up!\n");
   
@@ -49,17 +42,19 @@ void setup()
   SPI.begin();
   SPI.setBitOrder(MSBFIRST);
   SPI.setDataMode(SPI_MODE0);
-
   //start controlling the voltage supply
   voltageDAC.begin();
   
   analogReference(DEFAULT); // 5V
   
-  input = analogRead(5);
+  Input = analogRead(5);
+  Setpoint = 40.0; // degrees C
 
   //turn the PID on
-  // myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(0.0, 2.0);  
+  myPID.SetMode(AUTOMATIC);
+  myPID.SetOutputLimits(0.0, 2.0);
+  
+  initOversamplerData(&oversampler);
 }
 
 const float vref = 5.0;
@@ -140,44 +135,35 @@ start
 
   turn on the heater and start the PID loop.
 
-=== x1 inputs: ===
+t 45.0
+
+  set the temperature setpoint to 45 degrees celcius.
 
 p 1000
 
   set the period of the PID control loop to 1000 milliseconds.
 
-=== x10 inputs: ===
+kp 1.0
 
-t 453
+  set the proportional constant to 1.0.
 
-  set the temperature setpoint to 45.3 degrees celcius.
+ki 1.0
 
-callow 253
+  set the integral constant to 1.0.
 
-  use the current temperature sensor reading to calibrate the lower end of the temperature linear interpolation scale to 25.3 degrees celcius.
+kd 1.0
 
-calhigh 512
+  set the derivative constant to 1.0.
 
-  use the current temperature sensor reading to calibrate the upper end of the temperature linear interpolation scale to 51.2 degrees celcius.
+callow 25.0
 
-=== x1000 inputs: ===
+  use the current temperature sensor reading to calibrate the lower end of the temperature linear interpolation scale to 25.0 degrees celcius.
 
-kp 13
+calhigh 50.0
 
-  set the proportional constant to 0.013.
-
-ki 1788
-
-  set the integral constant to 1.788.
-
-kd 24100
-
-  set the derivative constant to 24.1.
+  use the current temperature sensor reading to calibrate the upper end of the temperature linear interpolation scale to 50.0 degrees celcius.
 
 */
-
-char *start_command = "start";
-char *t_command = "t";
 
 void possiblyHandleCompletedLineOfInput()
 {
@@ -196,27 +182,26 @@ void handleCompletedLineOfInput(char *inputLine)
   char *p = inputLine;
   char *command = strtok_r(p, " ", &p);
 
-  // if (command == NULL)
-  // {
-  //   unknown_command();
-  //   return;
-  // }
+  if (command == NULL)
+  {
+    unknown_command();
+    return;
+  }
 
-  if (strcmp(command, start_command) == 0)
+  if (strcmp(command, "start") == 0)
   {
     start();
     return;
   }
 
-  // if (strcmp(command, "stop") == 0)
-  // {
-  //   stop();
-  //   return;
-  // }
+  if (strcmp(command, "stop") == 0)
+  {
+    stop();
+    return;
+  }
 
   char *tailptr = p;
-  // float value = strtod(p, &tailptr);
-  float value = (float)atoi(p);
+  float value = strtod(p, &tailptr);
   if (tailptr == p)
   {
     // see http://www.gnu.org/software/libc/manual/html_node/Parsing-of-Floats.html
@@ -225,47 +210,47 @@ void handleCompletedLineOfInput(char *inputLine)
     return;
   }
 
-  if (strcmp(command, t_command) == 0)
+  if (strcmp(command, "t") == 0)
   {
     set_t(value);
     return;
   }
 
-  // if (strcmp(command, "p") == 0)
-  // {
-  //   set_p((uint16_t)value);
-  //   return;
-  // }
+  if (strcmp(command, "p") == 0)
+  {
+    set_p((uint16_t)value);
+    return;
+  }
 
-  // if (strcmp(command, "kp") == 0)
-  // {
-  //   set_kp(value);
-  //   return;
-  // }
+  if (strcmp(command, "kp") == 0)
+  {
+    set_kp(value);
+    return;
+  }
 
-  // if (strcmp(command, "ki") == 0)
-  // {
-  //   set_ki(value);
-  //   return;
-  // }
+  if (strcmp(command, "ki") == 0)
+  {
+    set_ki(value);
+    return;
+  }
 
-  // if (strcmp(command, "kd") == 0)
-  // {
-  //   set_kd(value);
-  //   return;
-  // }
+  if (strcmp(command, "kd") == 0)
+  {
+    set_kd(value);
+    return;
+  }
 
-  // if (strcmp(command, "callow") == 0)
-  // {
-  //   cal_low(value);
-  //   return;
-  // }
+  if (strcmp(command, "callow") == 0)
+  {
+    cal_low(value);
+    return;
+  }
 
-  // if (strcmp(command, "calhigh") == 0)
-  // {
-  //   cal_high(value);
-  //   return;
-  // }
+  if (strcmp(command, "calhigh") == 0)
+  {
+    cal_high(value);
+    return;
+  }
 
   // unknown_command();
 }
@@ -282,16 +267,13 @@ void stop()
 
 void start()
 {
-  Serial.print("\n");
-  Serial.println(start_command);
   // Serial.print("\nStopping PID control loop and disabling heater.\n");
 }
 
 void set_t(float newValue)
 {
-  setpoint = newValue;
-  // ok();
-  serialPrintSettingTo(t_command, newValue);
+  Setpoint = newValue;
+  // serialPrintSettingTo("temperature setpoint", newValue);
 }
 
 void set_p(uint16_t newValue)
@@ -315,17 +297,17 @@ void set_ki(float newValue)
 void set_kd(float newValue)
 {
   kd = newValue;
-  serialPrintSettingTo("derivative constant", newValue);
+  // serialPrintSettingTo("derivative constant", newValue);
 }
 
-void serialPrintSettingTo(char *what, float toValue)
-{
-  Serial.print("\nSetting ");
-  Serial.print(what);
-  Serial.print(" to ");
-  Serial.print(toValue);
-  Serial.print(".\n");
-}
+// void serialPrintSettingTo(char *what, float toValue)
+// {
+  // Serial.print("\nSetting ");
+  // Serial.print(what);
+  // Serial.print(" to ");
+  // Serial.print(toValue);
+  // Serial.print(".\n");
+// }
 
 void cal_low(float newValue)
 {
@@ -340,11 +322,6 @@ void cal_high(float newValue)
 void unknown_command()
 {
   Serial.print("\nUnknown command.\n");
-}
-
-void ok()
-{
-  Serial.print("\nOK.\n");
 }
 
 void possiblyIteratePIDLoop()
@@ -362,11 +339,11 @@ void possiblyIteratePIDLoop()
 void iteratePIDLoop()
 {
   delay(1);
-  input = analogRead64x(&oversampler, 5);
+  Input = analogRead64x(&oversampler, 5);
   delay(1);
 
-  int adc_input = input;  
-  input = (((input / adc_counts) * vref) - v_at_zero_c) / v_per_c; // convert to degrees celcius
+  int adc_input = Input;  
+  Input = (((Input / adc_counts) * vref) - v_at_zero_c) / v_per_c; // convert to degrees celcius
 
   // Serial.print("Input: ");
   // Serial.print(adc_input);
@@ -376,16 +353,16 @@ void iteratePIDLoop()
 
   myPID.Compute();
 
-  if (output <= 0.001)
+  if (Output <= 0.001)
   {
     voltageDAC.setVoltageOutputBits(0, 0);
   }
   else
   {
-    voltageDAC.setVoltageOutput(output);  
+    voltageDAC.setVoltageOutput(Output);  
   }
 
-  // float amps = Output / dac_gain / rsense_ohms;
+  float amps = Output / dac_gain / rsense_ohms;
 
   // Serial.print(" Output: ");
   // Serial.print(Output, 3);
