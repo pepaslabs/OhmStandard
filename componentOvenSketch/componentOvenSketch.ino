@@ -6,22 +6,36 @@
 
 // thanks to the following useful article: http://www.dyadica.co.uk/journal/simple-serial-string-parsing/
 
+// note: I ran into a bunch of relocation truncation errors which I solved via http://forum.arduino.cc/index.php/topic,60649.0.html
+// note that simply replacing my Arduino/hardware/tools/avr with a modern version of WinAVR was sufficient to solve the problem.
+// I did not have to futz with the avrdud.conf, etc (yet...)
+
 #include <stdlib.h>
 #include <string.h> // for strcmp, strtod
-
 #include <stdint.h> // for uint16_t
 
-#include <SPI.h>
-#include <MCP4801.h>
+#include <SoftwareSerial.h>
+
+#include <SoftSPI.h>
+#include <MCP4801SoftSPI.h>
 #include <PID_v1.h>
 
 #include "Oversampler.h"
-// Oversampler uses about 176 bytes (of 8K)
+
+#define SoftSPI_MOSI_pin 3
+#define SoftSPI_MISO_pin 4
+#define SoftSPI_SCK_pin 5
+SoftSPI mySPI(SoftSPI_MOSI_pin, SoftSPI_MISO_pin, SoftSPI_SCK_pin);
 
 //configure the DAC chip
-MCP4801Class voltageDAC(10,  //slaveSelectLowPin
-                        8,  //ldacLowPin
-                        9  //shutdownLowPin
+#define MCP4801_SLAVESELECTLOW_pin 6
+#define MCP4801_LDACLOW_pin 7
+#define MCP4801_SHUTDOWNLOW_pin 8
+
+MCP4801SoftSPI voltageDAC(MCP4801_SLAVESELECTLOW_pin,
+                        MCP4801_LDACLOW_pin,
+                        MCP4801_SHUTDOWNLOW_pin,
+                        &mySPI
                        );
 
 double setpoint = 40.0; // degrees C
@@ -32,23 +46,44 @@ float ki = 0.3;
 float kd = 0.01;
 PID myPID = PID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
 
-
-uint16_t pidControlLoopPeriodInMillis = 1000;
+//uint16_t pidControlLoopPeriodInMillis = 1000;
+#define pidControlLoopPeriodInMillis 1000
 unsigned long timeOfLastPIDControlLoopIterationInMillis = 0;
 
 OversamplerData oversampler;
+
+#define RX_pin 1
+#define TX_pin 2
+SoftwareSerial mySerial(RX_pin, TX_pin);
+
+#define VREF (5.0)
+#define ADC_COUNTS (1024.0)
+#define V_PER_C (0.18107) // determined via LTSpice
+#define V_AT_ZERO_C (-3.759) // determined via LTSpice
+
+#define DAC_GAIN 34
+#define RSENSE_OHMS 0.333
+
+// === serial console ===
+
+#define MAX_INPUT_BUFFER_LENGTH 16
+char inputBuffer[MAX_INPUT_BUFFER_LENGTH + sizeof('\0')] = {'\0'};
+char *inputBufferPointer = inputBuffer;
+boolean isInBufferOverflowState = false;
+boolean completedInputLineIsReady = false;
+char completedLineOfInput[sizeof(inputBuffer)] = {'\0'};
 
 void setup()
 {
   initOversamplerData(&oversampler);
 
-  Serial.begin(9600, SERIAL_8N1);
+  mySerial.begin(9600);
   // Serial.print("\nTemperature PID controller starting up!\n");
   
   //start up the SPI bus                   
-  SPI.begin();
-  SPI.setBitOrder(MSBFIRST);
-  SPI.setDataMode(SPI_MODE0);
+  mySPI.begin();
+  mySPI.setBitOrder(MSBFIRST);
+  mySPI.setDataMode(SPI_MODE0);
 
   //start controlling the voltage supply
   voltageDAC.begin();
@@ -62,33 +97,21 @@ void setup()
   myPID.SetOutputLimits(0.0, 2.0);  
 }
 
-const float vref = 5.0;
-const float adc_counts = 1024.0;
-const float v_per_c = 0.18107; // determined via LTSpice
-const float v_at_zero_c = -3.759; // determined via LTSpice
-
-const float dac_gain = 34;
-const float rsense_ohms = 0.333;
-
-
-// === serial console ===
-
-
-#define MAX_INPUT_BUFFER_LENGTH 16
-char inputBuffer[MAX_INPUT_BUFFER_LENGTH + sizeof('\0')] = {'\0'};
-char *inputBufferPointer = inputBuffer;
-boolean isInBufferOverflowState = false;
-boolean completedInputLineIsReady = false;
-char completedLineOfInput[sizeof(inputBuffer)] = {'\0'};
+void loop()
+{
+  possiblyHandleInputChar();
+  possiblyHandleCompletedLineOfInput();
+  possiblyIteratePIDLoop();
+}
 
 void possiblyHandleInputChar()
 {
-  if (Serial.available() == 0)
+  if (mySerial.available() == 0)
   {
     return;
   }
 
-  char ch = Serial.read();
+  char ch = mySerial.read();
   handleInputChar(ch);
 }
 
@@ -202,11 +225,11 @@ void handleCompletedLineOfInput(char *inputLine)
   //   return;
   // }
 
-  if (strcmp(command, start_command) == 0)
-  {
-    start();
-    return;
-  }
+//  if (strcmp(command, start_command) == 0)
+//  {
+//    start();
+//    return;
+//  }
 
   // if (strcmp(command, "stop") == 0)
   // {
@@ -221,15 +244,15 @@ void handleCompletedLineOfInput(char *inputLine)
   {
     // see http://www.gnu.org/software/libc/manual/html_node/Parsing-of-Floats.html
     // see http://forum.arduino.cc/index.php/topic,42770.0.html
-    unknown_command();
+//    unknown_command();
     return;
   }
 
-  if (strcmp(command, t_command) == 0)
-  {
-    set_t(value);
-    return;
-  }
+//  if (strcmp(command, t_command) == 0)
+//  {
+//    set_t(value);
+//    return;
+//  }
 
   // if (strcmp(command, "p") == 0)
   // {
@@ -270,23 +293,28 @@ void handleCompletedLineOfInput(char *inputLine)
   // unknown_command();
 }
 
+/*
 void dump()
 {
 
 }
+*/
 
+/*
 void stop()
 {
-  // Serial.print("\nEnabling heater and starting PID control loop.\n");
+  // serial.print("\nEnabling heater and starting PID control loop.\n");
 }
 
 void start()
 {
-  Serial.print("\n");
-  Serial.println(start_command);
-  // Serial.print("\nStopping PID control loop and disabling heater.\n");
+  mySerial.print("\n");
+  mySerial.println(start_command);
+  // mySerial.print("\nStopping PID control loop and disabling heater.\n");
 }
+*/
 
+/*
 void set_t(float newValue)
 {
   setpoint = newValue;
@@ -299,6 +327,7 @@ void set_p(uint16_t newValue)
   pidControlLoopPeriodInMillis = newValue;
   // serialPrintSettingTo("control loop period (in milliseconds)", newValue);
 }
+*/
 
 void set_kp(float newValue)
 {
@@ -320,13 +349,14 @@ void set_kd(float newValue)
 
 void serialPrintSettingTo(char *what, float toValue)
 {
-  Serial.print("\nSetting ");
-  Serial.print(what);
-  Serial.print(" to ");
-  Serial.print(toValue);
-  Serial.print(".\n");
+  mySerial.print("\nSetting ");
+  mySerial.print(what);
+  mySerial.print(" to ");
+  mySerial.print(toValue);
+  mySerial.print(".\n");
 }
 
+/*
 void cal_low(float newValue)
 {
   // serialPrintSettingTo("lower calibration point to", newValue);
@@ -336,16 +366,19 @@ void cal_high(float newValue)
 {
   // serialPrintSettingTo("upper calibration point to", newValue);
 }
+*/
 
+/*
 void unknown_command()
 {
-  Serial.print("\nUnknown command.\n");
+  mySerial.print("\nUnknown command.\n");
 }
 
 void ok()
 {
-  Serial.print("\nOK.\n");
+  mySerial.print("\nOK.\n");
 }
+*/
 
 void possiblyIteratePIDLoop()
 {
@@ -366,13 +399,13 @@ void iteratePIDLoop()
   delay(1);
 
   int adc_input = input;  
-  input = (((input / adc_counts) * vref) - v_at_zero_c) / v_per_c; // convert to degrees celcius
+  input = (((input / ADC_COUNTS) * VREF) - V_AT_ZERO_C) / V_PER_C; // convert to degrees celcius
 
-  // Serial.print("Input: ");
-  // Serial.print(adc_input);
-  // Serial.print(" (");
-  // Serial.print(Input, 3);
-  // Serial.print("C)");
+  // mySerial.print("Input: ");
+  // mySerial.print(adc_input);
+  // mySerial.print(" (");
+  // mySerial.print(Input, 3);
+  // mySerial.print("C)");
 
   myPID.Compute();
 
@@ -387,21 +420,14 @@ void iteratePIDLoop()
 
   // float amps = Output / dac_gain / rsense_ohms;
 
-  // Serial.print(" Output: ");
-  // Serial.print(Output, 3);
-  // Serial.print("V DAC");
+  // mySerial.print(" Output: ");
+  // mySerial.print(Output, 3);
+  // mySerial.print("V DAC");
 
-  // Serial.print(" (");
-  // Serial.print(amps, 3);
-  // Serial.print("A)");
+  // mySerial.print(" (");
+  // mySerial.print(amps, 3);
+  // mySerial.print("A)");
 
-  // Serial.println();
-}
-
-void loop()
-{
-  possiblyHandleInputChar();
-  possiblyHandleCompletedLineOfInput();
-  possiblyIteratePIDLoop();
+  // mySerial.println();
 }
 
