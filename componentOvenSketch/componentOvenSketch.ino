@@ -65,7 +65,7 @@ double output = 0;
 double setpoint = 40.0; // degrees C
 float kp = 0.7;
 float ki = 0.3;
-float kd = 0.01;
+float kd = 0.0;
 float kd_backup = 0;
 PID myPID = PID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
 
@@ -186,10 +186,6 @@ l ('ell'): decrease the proportional constant by 1%.
 i: increase the integral constant by 1%.
 j: decrease the integral constant by 1%.
 
-d: increase the derivative constant by 1%.
-x: decrease the derivative constant by 1%.
-D: toggle derivative control on/off.
-
 */
 
   char ch = mySerial.read();
@@ -244,18 +240,6 @@ D: toggle derivative control on/off.
     case 'j':
       ki *= 0.99;
       break;
-    
-    case 'd':
-      kd *= 1.01;
-      break;
-    
-    case 'x':
-      kd *= 0.99;
-      break;
-    
-    case 'D':
-      toggle_derivative_control();
-      break;
   }
 
 }
@@ -266,17 +250,4 @@ void calibrate_low() {}
 void calibrate_high() {}
 void turn_on_heater_and_start_PID_loop() { }
 void turn_off_heater_and_stop_PID_loop() { }
-
-void toggle_derivative_control()
-{
-  if (kd == 0)
-  {
-    kd = kd_backup;
-  }
-  else
-  {
-    kd_backup = kd;
-    kd = 0;
-  }
-}
 
