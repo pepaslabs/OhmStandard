@@ -98,26 +98,23 @@ void setup()
 
 void loop()
 {
-  possiblyHandleInputChar();
-  possiblyIteratePIDLoop();
+  handleInputChar();
+  iteratePIDLoop();
 }
 
 // --- PID implemetation
 
-void possiblyIteratePIDLoop()
+void iteratePIDLoop()
 {
   unsigned long currentTimeInMillis = millis();
   // supposedly this is sufficient to handle overflow?  see http://www.baldengineer.com/blog/2012/07/16/arduino-how-do-you-reset-millis/
   unsigned long elapsedTime = (unsigned long)(currentTimeInMillis - timeOfLastPIDControlLoopIterationInMillis);
-  if (elapsedTime >= pidControlLoopPeriodInMillis)
+  if (elapsedTime < pidControlLoopPeriodInMillis)
   {
-    iteratePIDLoop();
-    timeOfLastPIDControlLoopIterationInMillis = currentTimeInMillis;
+    return;
   }
-}
-
-void iteratePIDLoop()
-{
+  timeOfLastPIDControlLoopIterationInMillis = currentTimeInMillis;
+  
   // 64x oversampling
   uint16_t accumulator = 0;
   for (uint8_t count=0; count < 64; count++)
@@ -162,7 +159,7 @@ void iteratePIDLoop()
 
 // --- serial terminal interface
 
-void possiblyHandleInputChar()
+void handleInputChar()
 {
   if (mySerial.available() == 0)
   {
