@@ -22,8 +22,6 @@
 #include <SoftSPI.h>
 #include <MCP4801SoftSPI.h>
 
-#include "Oversampler.h"
-
 // --- ATTiny pins
 
 #define RX_pin 1
@@ -74,14 +72,10 @@ PID myPID = PID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
 uint16_t pidControlLoopPeriodInMillis = 1000;
 unsigned long timeOfLastPIDControlLoopIterationInMillis = 0;
 
-OversamplerData oversampler;
-
 // ---
 
 void setup()
 {
-  initOversamplerData(&oversampler);
-
   mySerial.begin(9600);
   // Serial.print("\nTemperature PID controller starting up!\n");
   
@@ -123,12 +117,17 @@ void possiblyIteratePIDLoop()
 }
 
 void iteratePIDLoop()
-{  
-  input = analogRead64x(&oversampler, MCP9701_pin);
-
+{
+  // 64x oversampling
+  uint16_t accumulator = 0;
+  for (uint8_t count=0; count < 64; count++)
+  {
+    accumulator += analogRead(MCP9701_pin);
+  }
+  input = accumulator >> 6;
+  
   mySerial.println(input);
-//  int adc_input = input;  
-  input = (((input / ADC_COUNTS) * VREF) - V_AT_ZERO_C) / V_PER_C; // convert to degrees celcius
+//  input = (((input / ADC_COUNTS) * VREF) - V_AT_ZERO_C) / V_PER_C; // convert to degrees celcius
 
 //  mySerial.print("Input: ");
   // mySerial.print(" (");
