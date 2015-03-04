@@ -10,51 +10,33 @@
 // note that simply replacing my Arduino/hardware/tools/avr with a modern version of WinAVR was sufficient to solve the problem.
 // I did not have to futz with the avrdud.conf, etc (yet...)
 
+// --- includes
+
 #include <stdlib.h>
-#include <string.h> // for strcmp, strtod
-#include <stdint.h> // for uint16_t
+#include <string.h>
+#include <stdint.h>
+
+#include <PID_v1.h>
 
 #include <SoftwareSerial.h>
-
 #include <SoftSPI.h>
 #include <MCP4801SoftSPI.h>
-#include <PID_v1.h>
 
 #include "Oversampler.h"
 
+// --- ATTiny pins
+
+#define RX_pin 1
+#define MCP9701_pin 2
+#define TX_pin 3
 #define SoftSPI_MOSI_pin 3
 #define SoftSPI_MISO_pin 4
 #define SoftSPI_SCK_pin 5
-SoftSPI mySPI(SoftSPI_MOSI_pin, SoftSPI_MISO_pin, SoftSPI_SCK_pin);
-
-//configure the DAC chip
 #define MCP4801_SLAVESELECTLOW_pin 6
 #define MCP4801_LDACLOW_pin 7
 #define MCP4801_SHUTDOWNLOW_pin 8
 
-MCP4801SoftSPI voltageDAC(MCP4801_SLAVESELECTLOW_pin,
-                        MCP4801_LDACLOW_pin,
-                        MCP4801_SHUTDOWNLOW_pin,
-                        &mySPI
-                       );
-
-double setpoint = 40.0; // degrees C
-double input = 0;
-double output = 0;
-float kp = 0.7;
-float ki = 0.3;
-float kd = 0.01;
-PID myPID = PID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
-
-//uint16_t pidControlLoopPeriodInMillis = 1000;
-#define pidControlLoopPeriodInMillis 1000
-unsigned long timeOfLastPIDControlLoopIterationInMillis = 0;
-
-OversamplerData oversampler;
-
-#define RX_pin 1
-#define TX_pin 2
-SoftwareSerial mySerial(RX_pin, TX_pin);
+// --- defines
 
 #define VREF (5.0)
 #define ADC_COUNTS (1024.0)
@@ -64,14 +46,37 @@ SoftwareSerial mySerial(RX_pin, TX_pin);
 #define DAC_GAIN 34
 #define RSENSE_OHMS 0.333
 
-// === serial console ===
+// --- SPI / MCP4801 DAC setup
 
-#define MAX_INPUT_BUFFER_LENGTH 16
-char inputBuffer[MAX_INPUT_BUFFER_LENGTH + sizeof('\0')] = {'\0'};
-char *inputBufferPointer = inputBuffer;
-boolean isInBufferOverflowState = false;
-boolean completedInputLineIsReady = false;
-char completedLineOfInput[sizeof(inputBuffer)] = {'\0'};
+SoftSPI mySPI(SoftSPI_MOSI_pin, SoftSPI_MISO_pin, SoftSPI_SCK_pin);
+
+MCP4801SoftSPI voltageDAC(MCP4801_SLAVESELECTLOW_pin,
+                          MCP4801_LDACLOW_pin,
+                          MCP4801_SHUTDOWNLOW_pin,
+                          &mySPI
+                         );
+
+// --- serial port setup
+
+SoftwareSerial mySerial(RX_pin, TX_pin);
+
+// --- PID setup
+
+double input = 0;
+double output = 0;
+double setpoint = 40.0; // degrees C
+float kp = 0.7;
+float ki = 0.3;
+float kd = 0.01;
+float kd_backup = 0;
+PID myPID = PID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
+
+uint16_t pidControlLoopPeriodInMillis = 1000;
+unsigned long timeOfLastPIDControlLoopIterationInMillis = 0;
+
+OversamplerData oversampler;
+
+// ---
 
 void setup()
 {
@@ -90,295 +95,20 @@ void setup()
   
   analogReference(DEFAULT); // 5V
   
-  input = analogRead(5);
+  input = analogRead(MCP9701_pin);
 
   //turn the PID on
   // myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(0.0, 2.0);  
+//  myPID.SetOutputLimits(0.0, 2.0);
 }
 
 void loop()
 {
   possiblyHandleInputChar();
-  possiblyHandleCompletedLineOfInput();
   possiblyIteratePIDLoop();
 }
 
-void possiblyHandleInputChar()
-{
-  if (mySerial.available() == 0)
-  {
-    return;
-  }
-
-  char ch = mySerial.read();
-  handleInputChar(ch);
-}
-
-void handleInputChar(char ch)
-{
-  if (isInBufferOverflowState == true)
-  {
-    if (ch == '\n')
-    {
-      isInBufferOverflowState = false;
-    }
-
-    return;
-  }
-
-  if (ch == '\n')
-  {
-    *inputBufferPointer = '\0';
-    strncpy(completedLineOfInput, inputBuffer, sizeof(inputBuffer));
-    completedInputLineIsReady = true;
-    inputBufferPointer = inputBuffer;
-  }
-  else if (ch != '\n')
-  {
-    *inputBufferPointer = ch;
-    inputBufferPointer++;
-
-    if (inputBufferPointer == inputBuffer + MAX_INPUT_BUFFER_LENGTH)
-    {
-      isInBufferOverflowState = true;
-      inputBufferPointer = inputBuffer;
-    }    
-  }
-}
-
-/*
-
-serial terminal interface:
-
-dump
-
-  print out all settings.
-
-stop
-
-  turn off the heater and stop the PID loop.
-
-start
-
-  turn on the heater and start the PID loop.
-
-=== x1 inputs: ===
-
-p 1000
-
-  set the period of the PID control loop to 1000 milliseconds.
-
-=== x10 inputs: ===
-
-t 453
-
-  set the temperature setpoint to 45.3 degrees celcius.
-
-callow 253
-
-  use the current temperature sensor reading to calibrate the lower end of the temperature linear interpolation scale to 25.3 degrees celcius.
-
-calhigh 512
-
-  use the current temperature sensor reading to calibrate the upper end of the temperature linear interpolation scale to 51.2 degrees celcius.
-
-=== x1000 inputs: ===
-
-kp 13
-
-  set the proportional constant to 0.013.
-
-ki 1788
-
-  set the integral constant to 1.788.
-
-kd 24100
-
-  set the derivative constant to 24.1.
-
-*/
-
-char *start_command = "start";
-char *t_command = "t";
-
-void possiblyHandleCompletedLineOfInput()
-{
-  if (completedInputLineIsReady == false)
-  {
-    return;
-  }
-
-  handleCompletedLineOfInput(completedLineOfInput);
-  completedLineOfInput[0] = '\0';
-  completedInputLineIsReady = false;
-}
-
-void handleCompletedLineOfInput(char *inputLine)
-{
-  char *p = inputLine;
-  char *command = strtok_r(p, " ", &p);
-
-  // if (command == NULL)
-  // {
-  //   unknown_command();
-  //   return;
-  // }
-
-//  if (strcmp(command, start_command) == 0)
-//  {
-//    start();
-//    return;
-//  }
-
-  // if (strcmp(command, "stop") == 0)
-  // {
-  //   stop();
-  //   return;
-  // }
-
-  char *tailptr = p;
-  // float value = strtod(p, &tailptr);
-  float value = (float)atoi(p);
-  if (tailptr == p)
-  {
-    // see http://www.gnu.org/software/libc/manual/html_node/Parsing-of-Floats.html
-    // see http://forum.arduino.cc/index.php/topic,42770.0.html
-//    unknown_command();
-    return;
-  }
-
-//  if (strcmp(command, t_command) == 0)
-//  {
-//    set_t(value);
-//    return;
-//  }
-
-  // if (strcmp(command, "p") == 0)
-  // {
-  //   set_p((uint16_t)value);
-  //   return;
-  // }
-
-  // if (strcmp(command, "kp") == 0)
-  // {
-  //   set_kp(value);
-  //   return;
-  // }
-
-  // if (strcmp(command, "ki") == 0)
-  // {
-  //   set_ki(value);
-  //   return;
-  // }
-
-  // if (strcmp(command, "kd") == 0)
-  // {
-  //   set_kd(value);
-  //   return;
-  // }
-
-  // if (strcmp(command, "callow") == 0)
-  // {
-  //   cal_low(value);
-  //   return;
-  // }
-
-  // if (strcmp(command, "calhigh") == 0)
-  // {
-  //   cal_high(value);
-  //   return;
-  // }
-
-  // unknown_command();
-}
-
-/*
-void dump()
-{
-
-}
-*/
-
-/*
-void stop()
-{
-  // serial.print("\nEnabling heater and starting PID control loop.\n");
-}
-
-void start()
-{
-  mySerial.print("\n");
-  mySerial.println(start_command);
-  // mySerial.print("\nStopping PID control loop and disabling heater.\n");
-}
-*/
-
-/*
-void set_t(float newValue)
-{
-  setpoint = newValue;
-  // ok();
-  serialPrintSettingTo(t_command, newValue);
-}
-
-void set_p(uint16_t newValue)
-{
-  pidControlLoopPeriodInMillis = newValue;
-  // serialPrintSettingTo("control loop period (in milliseconds)", newValue);
-}
-*/
-
-void set_kp(float newValue)
-{
-  kp = newValue;
-  // serialPrintSettingTo("proportional constant", newValue);
-}
-
-void set_ki(float newValue)
-{
-  ki = newValue;
-  // serialPrintSettingTo("integral constant", newValue);
-}
-
-void set_kd(float newValue)
-{
-  kd = newValue;
-  serialPrintSettingTo("derivative constant", newValue);
-}
-
-void serialPrintSettingTo(char *what, float toValue)
-{
-  mySerial.print("\nSetting ");
-  mySerial.print(what);
-  mySerial.print(" to ");
-  mySerial.print(toValue);
-  mySerial.print(".\n");
-}
-
-/*
-void cal_low(float newValue)
-{
-  // serialPrintSettingTo("lower calibration point to", newValue);
-}
-
-void cal_high(float newValue)
-{
-  // serialPrintSettingTo("upper calibration point to", newValue);
-}
-*/
-
-/*
-void unknown_command()
-{
-  mySerial.print("\nUnknown command.\n");
-}
-
-void ok()
-{
-  mySerial.print("\nOK.\n");
-}
-*/
+// --- PID implemetation
 
 void possiblyIteratePIDLoop()
 {
@@ -393,19 +123,18 @@ void possiblyIteratePIDLoop()
 }
 
 void iteratePIDLoop()
-{
-  delay(1);
-  input = analogRead64x(&oversampler, 5);
-  delay(1);
+{  
+  input = analogRead64x(&oversampler, MCP9701_pin);
 
-  int adc_input = input;  
+  mySerial.println(input);
+//  int adc_input = input;  
   input = (((input / ADC_COUNTS) * VREF) - V_AT_ZERO_C) / V_PER_C; // convert to degrees celcius
 
-  // mySerial.print("Input: ");
-  // mySerial.print(adc_input);
+//  mySerial.print("Input: ");
   // mySerial.print(" (");
-  // mySerial.print(Input, 3);
+//  mySerial.print(input, 3);
   // mySerial.print("C)");
+
 
   myPID.Compute();
 
@@ -418,16 +147,140 @@ void iteratePIDLoop()
     voltageDAC.setVoltageOutput(output);  
   }
 
-  // float amps = Output / dac_gain / rsense_ohms;
+
+//  float amps = output / DAC_GAIN / RSENSE_OHMS;
 
   // mySerial.print(" Output: ");
   // mySerial.print(Output, 3);
   // mySerial.print("V DAC");
 
   // mySerial.print(" (");
-  // mySerial.print(amps, 3);
+//  mySerial.println(amps, 3);
   // mySerial.print("A)");
 
-  // mySerial.println();
+//  mySerial.println(".");
+}
+
+// --- serial terminal interface
+
+void possiblyHandleInputChar()
+{
+  if (mySerial.available() == 0)
+  {
+    return;
+  }
+
+/* serial terminal interface (all single-character commands):
+
+? (or /): (help) print a help message.
+\: (dump) print out all settings.
+
+w: (warm): turn on the heater and start the PID loop.
+q: (quit) turn off the heater and stop the PID loop.
+
++ (or =): increase the temperature setpoint by 1 degree celcius
+-: decrease the temperature setpoint by 1 degree celcius
+
+'(': (calibrate low) set the lower end of the temperature linear interpolation scale to the current temperature sensor reading.
+')': (calibrate high) set the upper end of the temperature linear interpolation scale to the current temperature sensor reading.
+
+p: increase the proportional constant by 1%.
+l ('ell'): decrease the proportional constant by 1%.
+
+i: increase the integral constant by 1%.
+j: decrease the integral constant by 1%.
+
+d: increase the derivative constant by 1%.
+x: decrease the derivative constant by 1%.
+D: toggle derivative control on/off.
+
+*/
+
+  char ch = mySerial.read();
+  switch(ch)
+  {
+    case '?':
+    case '/':
+      print_help_message();
+      break;
+    
+    case '\\':
+      dump();
+      break;
+    
+    case 'w':
+      turn_on_heater_and_start_PID_loop();
+      break;
+    
+    case 'q':
+      turn_off_heater_and_stop_PID_loop();
+      break;
+    
+    case '+':
+    case '=':
+      setpoint += 1;
+      break;
+    
+    case '-':
+      setpoint -= 1;
+      break;
+    
+    case '(':
+      calibrate_low();
+      break;
+    
+    case ')':
+      calibrate_high();
+      break;
+    
+    case 'p':
+      kp *= 1.01;
+      break;
+    
+    case 'l':
+      kp *= 0.99;
+      break;
+    
+    case 'i':
+      ki *= 1.01;
+      break;
+    
+    case 'j':
+      ki *= 0.99;
+      break;
+    
+    case 'd':
+      kd *= 1.01;
+      break;
+    
+    case 'x':
+      kd *= 0.99;
+      break;
+    
+    case 'D':
+      toggle_derivative_control();
+      break;
+  }
+
+}
+
+void print_help_message() {}
+void dump() {}
+void calibrate_low() {}
+void calibrate_high() {}
+void turn_on_heater_and_start_PID_loop() { }
+void turn_off_heater_and_stop_PID_loop() { }
+
+void toggle_derivative_control()
+{
+  if (kd == 0)
+  {
+    kd = kd_backup;
+  }
+  else
+  {
+    kd_backup = kd;
+    kd = 0;
+  }
 }
 
